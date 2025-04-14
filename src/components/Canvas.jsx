@@ -4,6 +4,62 @@ import { getStroke } from 'perfect-freehand';
 import { useStore } from '../store/useStore';
 import { drawShape } from '../utils/shapes';
 
+const getElementBounds = (element) => {
+  if (!element || !element.points || element.points.length === 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  // For pen strokes and shapes with multiple points
+  element.points.forEach(point => {
+    const x = point.x ?? point[0];
+    const y = point.y ?? point[1];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  });
+
+  // Add padding for text elements
+  if (element.type === 'text') {
+    const padding = element.fontSize || 16;
+    maxX += (element.text || '').length * (padding * 0.6);
+    maxY += padding;
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
+const getElementAtPoint = (point, elements = []) => {
+  // Reverse loop to check elements from top to bottom (last drawn first)
+  for (let i = elements.length - 1; i >= 0; i--) {
+    const element = elements[i];
+    const bounds = getElementBounds(element);
+    
+    // Add some padding for easier selection
+    const padding = element.type === 'pen' ? 5 : 2;
+    
+    if (
+      point.x >= bounds.x - padding &&
+      point.x <= bounds.x + bounds.width + padding &&
+      point.y >= bounds.y - padding &&
+      point.y <= bounds.y + bounds.height + padding
+    ) {
+      return element;
+    }
+  }
+  return null;
+};
+
 const Canvas = () => {
   const canvasRef = useRef(null);
   const textInputRef = useRef(null);
@@ -15,6 +71,7 @@ const Canvas = () => {
     offset,
     addElement,
     updateElement,
+    setScale,
     setOffset,
     selectedElement,
     setSelectedElement,
@@ -24,6 +81,48 @@ const Canvas = () => {
   const [currentElement, setCurrentElement] = useState(null);
   const [lastPoint, setLastPoint] = useState(null);
   const [textInput, setTextInput] = useState({ visible: false, x: 0, y: 0, value: '' });
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    
+    // Get cursor position relative to page
+    const cursorX = e.clientX;
+    const cursorY = e.clientY;
+    
+    // Get cursor position relative to canvas
+    const canvasX = cursorX - rect.left;
+    const canvasY = cursorY - rect.top;
+
+    // Calculate zoom
+    const zoomDirection = -Math.sign(e.deltaY);
+    const zoomFactor = 2;
+    const newScale = zoomDirection > 0 
+      ? scale * zoomFactor 
+      : scale / zoomFactor;
+    
+    // Calculate the world point under cursor before zoom
+    const worldX = (canvasX / scale) + offset.x;
+    const worldY = (canvasY / scale) + offset.y;
+    
+    // Calculate the new offset that keeps the world point under cursor
+    const newOffset = {
+      x: offset.x - (worldX - ((canvasX / newScale) + offset.x)),
+      y: offset.y - (worldY - ((canvasY / newScale) + offset.y))
+    };
+
+    setScale(newScale);
+    setOffset(newOffset);
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [scale, offset, setScale, setOffset]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -113,13 +212,38 @@ const Canvas = () => {
     if (e.button === 2) return; // Ignore right click
 
     if (currentTool === 'move') {
-      setLastPoint(getCanvasPoint(e));
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const startDrag = {
+        x: e.clientX,
+        y: e.clientY,
+        offsetX: offset.x,
+        offsetY: offset.y
+      };
+
+      const handleMouseMove = (moveEvent) => {
+        const dx = moveEvent.clientX - startDrag.x;
+        const dy = moveEvent.clientY - startDrag.y;
+        setOffset({
+          x: startDrag.offsetX + dx / scale,
+          y: startDrag.offsetY + dy / scale
+        });
+      };
+
+      const handleMouseUp = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
       return;
     }
 
     if (currentTool === 'select') {
       const point = getCanvasPoint(e);
-      const clickedElement = getElementAtPoint(point);
+      const clickedElement = getElementAtPoint(point, elements);
       setSelectedElement(clickedElement?.id || null);
       return;
     }
@@ -151,10 +275,19 @@ const Canvas = () => {
 
   const draw = e => {
     if (currentTool === 'move' && lastPoint) {
-      const currentPoint = getCanvasPoint(e);
-      const dx = currentPoint.x - lastPoint.x;
-      const dy = currentPoint.y - lastPoint.y;
-      setOffset({ x: offset.x + dx * scale, y: offset.y + dy * scale });
+      const currentPoint = {
+        x: e.clientX,
+        y: e.clientY
+      };
+      
+      const dx = (currentPoint.x - lastPoint.x) / scale;
+      const dy = (currentPoint.y - lastPoint.y) / scale;
+      
+      setOffset({
+        x: offset.x + dx,
+        y: offset.y + dy
+      });
+      
       setLastPoint(currentPoint);
       return;
     }
