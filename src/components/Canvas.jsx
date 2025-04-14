@@ -16,8 +16,8 @@ const getElementBounds = (element) => {
 
   // For pen strokes and shapes with multiple points
   element.points.forEach(point => {
-    const x = point.x || point[0];
-    const y = point.y || point[1];
+    const x = point.x ?? point[0];
+    const y = point.y ?? point[1];
     minX = Math.min(minX, x);
     minY = Math.min(minY, y);
     maxX = Math.max(maxX, x);
